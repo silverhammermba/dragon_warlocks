@@ -11,20 +11,26 @@ def tick args
 
   args.state.result ||= []
 
+  # is this a time stop turn?
+  time_stopped = args.state.beings.any? { |b| b.time_stopped }
+
   # if this is a haste turn, but no one has haste, skip it
-  if args.state.haste && args.state.beings.all? { |b| !b.haste? }
+  if !time_stopped && args.state.haste && args.state.beings.all? { |b| !b.haste? }
     args.state.haste = false
   end
 
-  # advance time for all beings if this is the start of a non-haste turn
-  unless args.state.haste
+  # advance time for all beings if this is the start of a normal turn
+  if !time_stopped && !args.state.haste
+    # TODO record if paralysis input is needed for any warlock's  prior to tick
     args.state.beings.each { |b| b.tick }
   end
 
   # get all inputs from warlocks and see if they're ready
+  # TODO: get paralysis input first, if needed
+  wizard_acted = false
   both_ready = [args.state.west, args.state.east].map do |warlock|
-    # if this is a haste turn, but this warlock doesn't have haste, skip them
-    if args.state.haste && !warlock.haste?
+    # if this is a time stop or haste turn, but this warlock doesn't have it, skip them
+    if (time_stopped && !warlock.time_stopped) || (!time_stopped && args.state.haste && !warlock.haste?)
       next true
     end
 
@@ -83,6 +89,7 @@ def tick args
         warlock.index = 0
       end
     end
+    wizard_acted = true
     warlock.ready_to_resolve
   end.all?
 
@@ -100,11 +107,17 @@ def tick args
     end
 
     args.state.actions = actions.sort
-    args.state.result = []
+    # clear resolution if a wizard acted (it means we already saw what happened previously)
+    if wizard_acted
+      args.state.result = []
+    end
 
     # all monster attacks go last
     args.state.beings.each do |being|
-      if being.is_a?(Monster) && being.health > 0 && (!args.state.haste || being.haste?)
+      if (time_stopped && !being.time_stopped) || (!time_stopped && args.state.haste && !being.haste?)
+        next
+      end
+      if being.is_a?(Monster) && being.health > 0
         args.state.actions << being.attack
       end
     end
@@ -114,12 +127,26 @@ def tick args
       action.resolve args
     end
 
+    args.state.beings.each do |being|
+      being.clamp_health
+    end
+
     # clear spell selection
     args.state.west.choices = []
     args.state.east.choices = []
 
+    # check if anyone stopped time this turn
+    time_stopped = false
+    args.state.beings.each do |being|
+      time_stopped ||= being.time_stop
+      being.time_stopped = being.time_stop
+      being.time_stop = false
+    end
+
     # resolve opposite turn type next
-    args.state.haste = !args.state.haste
+    unless time_stopped
+      args.state.haste = !args.state.haste
+    end
   end
 
   [[args.state.west, 0, 1, 0], [args.state.east, 1280, -1, 2]].each do |warlock, edge, shift, alignment|

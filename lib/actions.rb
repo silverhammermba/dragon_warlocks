@@ -1,14 +1,19 @@
 class Being
   attr_reader :name, :health
 
-  # shielded blocks most damage sources
+  # shielded blocks physical damage
   # resistance is for elements
-  attr_accessor :shielded, :resistance, :haste
+  # haste is number of hasted turns remaining
+  # time_stop is whether time will stop for this being at the end of the turn
+  # time_stopped is whether time is currently stopped for this being
+  # paralysis is if being was paralyzed this turn (takes effect next turn for a warlock)
+  attr_accessor :shielded, :resistance, :haste, :time_stop, :time_stopped, :paralysis
 
   def initialize
     @shielded = false
     @resistance = {}
     @haste = 0
+    @protection = 0
   end
 
   def remove_enchantments
@@ -16,15 +21,47 @@ class Being
   end
 
   def tick
-    @shielded = false
+    @shielded = @protection > 0
+    @protection = [0, @protection - 1].max
+    @haste = [0, @haste - 1].max
+    @paralysis = false
   end
 
-  def damage x
-    @health = [@health - x, 0].max
+  def physical_damage x, attacker
+    if @shielded && (!attacker.time_stopped || @time_stopped)
+      return false
+    end
+    @health -= x
+    true
+  end
+
+  def elemental_damage x, element, attacker
+    if @resistance[element] && (!attacker.time_stopped || @time_stopped)
+      return false
+    end
+    @health -= x
+    true
+  end
+
+  def magical_damage x
+    @health = @health -= x
   end
 
   def heal x
-    @health = [@health + x, @max_health].min
+    @health += x
+  end
+
+  def protection= p
+    if p > 0
+      @shielded = true
+      @protection = p
+    else
+      @protection = 0
+    end
+  end
+
+  def clamp_health
+    @health = [0, [@health, @max_health].min].max
   end
 
   def kill
@@ -162,10 +199,15 @@ class DispelMonsters < Action
 
   def resolve args
     args.state.beings.reject! do |being|
-      being.is_a? Monster
+      if being.is_a? Monster
+        args.state.result << "Dispelled: #{being.name}"
+        true
+      end
     end
   end
 end
+
+# TODO: general pass to make sure actions don't affect dead beings in weird ways
 
 class Spell < Action
   class << self
@@ -218,11 +260,15 @@ class Attack < Action
   end
 
   def resolve args
-    if target.shielded
-      args.state.result << "#{description} (shielded)"
-    else
-      target.damage @strength
+    return if @target.health <= 0
+    if @user.paralysis
+      args.state.result << "Paralyzed: #{@user.name}"
+      return
+    end
+    if target.physical_damage @strength, @user
       args.state.result << description
+    else
+      args.state.result << "#{description} (shielded)"
     end
   end
 end
@@ -235,14 +281,17 @@ class ElementalAttack < Action
   end
 
   def resolve args
+    if @user.paralysis
+      args.state.result << "Paralyzed: #{@user.name}"
+      return
+    end
     # attack all non-resistant beings
     args.state.beings.each do |being|
-      next if being == @user # other than itself
-      if being.resistance[@element]
-        args.state.result << "#{@user.name} attacks #{being.name} (#{@strength}) (resisted)"
-      else
+      next if being == @user || being.health <= 0 # other than itself or a dead being
+      if being.elemental_damage @strength, @element, @user
         args.state.result << "#{@user.name} attacks #{being.name} (#{@strength})"
-        being.damage @strength
+      else
+        args.state.result << "#{@user.name} attacks #{being.name} (#{@strength}) (resisted)"
       end
     end
   end
@@ -464,15 +513,16 @@ class MagicMirror < Spell
       end
     end
 
+    args.state.result << description
+
     # reflect all spells against mirrored targets
     args.state.actions.each do |action|
       next unless action.is_a?(Spell)
       while mirrored[action.target] && action.target != action.origin
+        args.state.result << "Reflected: #{action.description}"
         action.user, action.target = action.target, action.user
       end
     end
-
-    args.state.result << description
   end
 end
 
@@ -500,6 +550,7 @@ class SummonGiant < SummonMinion
   @order = 6
   @strength = 4
 end
+
 class SummonFireElemental < SummonElemental
   @name = 'Fire Elemental'
   @order = 7
@@ -590,36 +641,101 @@ class Haste < Spell
     @target.haste = 3
   end
 end
+
 class TimeStop < Spell
   @name = 'Time Stop'
   @default_target = :self
   @order = 11
   @type = :enchantment
+
+  def resolve args
+    args.state.result << description
+    @target.time_stop = true
+  end
 end
+
 class Protection < Spell
   @name = 'Protection'
   @default_target = :self
   @order = 12
   @type = :enchantment
+
+  def resolve args
+    args.state.result << description
+    @target.protection = 3
+  end
 end
-class ResistHeat < Spell
+
+class ResistanceSpell < Spell
+  class << self
+    attr_reader :element
+  end
+
+  def resolve args
+    if @target.is_a?(Elemental)
+      if @target.element == self.class.element && @target.health > 0
+        args.state.result << description
+        args.state.result << "Destroyed: #{@target.name}"
+        @target.kill
+        args.state.actions.reject! { |a| a.user == @target }
+      else
+        args.state.result << "#{description} with no effect"
+      end
+    else
+      args.state.result << description
+      @target.resistance[self.class.element] = true
+    end
+  end
+end
+
+class ResistHeat < ResistanceSpell
   @name = 'Resist Heat'
   @default_target = :self
   @order = 13
   @type = :enchantment
+  @element = :fire
 end
-class ResistCold < Spell
+class ResistCold < ResistanceSpell
   @name = 'Resist Cold'
   @default_target = :self
   @order = 14
   @type = :enchantment
+  @element = :ice
 end
+
 class Paralysis < Spell
   @name = 'Paralysis'
   @default_target = :other
   @order = 15
   @type = :enchantment
+
+  def resolve args
+    cancelled = []
+    # paralyses cancel each other
+    args.state.actions.reject! do |action|
+      if action.is_a?(Paralysis) && action.target == @target
+        cancelled << action
+        true
+      end
+    end
+
+    # if other paralyses happened, or any other charm, cancel this spell
+    if cancelled.length > 0 || args.state.actions.any? { |a| a.target == @target && [Amnesia, Confusion, CharmPerson, CharmMonster, Fear].any? { |t| a.is_a? t } }
+      cancelled.unshift self
+    end
+
+    if cancelled.length > 0
+      cancelled.each do |action|
+        args.state.result << "Cancelled: #{action.description}"
+      end
+      return
+    end
+
+    args.state.result << description
+    @target.paralysis = true
+  end
 end
+
 class Amnesia < Spell
   @name = 'Amnesia'
   @default_target = :other
@@ -715,6 +831,11 @@ class Shield < Spell
   @default_target = :self
   @order = 31
   @type = :protection
+
+  def resolve args
+    args.state.result << description
+    @target.shielded = true
+  end
 end
 class MagicMissile < Spell
   @name = 'Magic Missile'
@@ -729,7 +850,7 @@ class CauseLightWounds < Spell
   @type = :damaging
 
   def resolve args
-    @target.damage 2
+    @target.magical_damage 2
     args.state.result << description
   end
 end
