@@ -6,8 +6,9 @@ class Being
   # haste is number of hasted turns remaining
   # time_stop is whether time will stop for this being at the end of the turn
   # time_stopped is whether time is currently stopped for this being
-  # paralysis is if being was paralyzed this turn (takes effect next turn for a warlock)
-  attr_accessor :shielded, :resistance, :haste, :time_stop, :time_stopped, :paralysis
+  # paralyzed_by records who paralyzed this being
+  attr_accessor :shielded, :resistance, :haste, :time_stop, :time_stopped
+  attr_reader :paralyzed_by
 
   def initialize
     @shielded = false
@@ -24,7 +25,15 @@ class Being
     @shielded = @protection > 0
     @protection = [0, @protection - 1].max
     @haste = [0, @haste - 1].max
-    @paralysis = false
+    @paralyzed_by = nil
+  end
+
+  def paralyze user
+    @paralyzed_by = user
+  end
+
+  def paralyzed_this_turn
+    @paralyzed_by != nil
   end
 
   def physical_damage x, attacker
@@ -77,12 +86,16 @@ class Being
   def haste?
     @haste > 0
   end
+
+  def to_s
+    "#{@name} (#{[0, [@health, @max_health].min].max}/#{@max_health})"
+  end
 end
 
 # player character
 class Warlock < Being
   attr_reader :up, :down, :select
-  attr_accessor :index, :choices, :targets
+  attr_accessor :index, :choices, :targets, :paralysis_target, :paralyzed_hand, :charm_target
 
   def initialize name, up, down, select
     super()
@@ -99,6 +112,13 @@ class Warlock < Being
     @choices = []
     # left, right
     @targets = []
+
+    @paralyzed_hand = nil
+  end
+
+  def tick
+    super
+    @paralyzed_hand = nil
   end
 
   def clear_input
@@ -107,7 +127,10 @@ class Warlock < Being
   end
 
   def ready_to_resolve
-    @choices.length >= 2 && @targets.length >= 2
+    @paralysis_target == nil &&
+      @charm_target == nil &&
+      @choices.length >= 2 &&
+      @targets.length >= 2
   end
 end
 
@@ -261,7 +284,7 @@ class Attack < Action
 
   def resolve args
     return if @target.health <= 0
-    if @user.paralysis
+    if @user.paralyzed_this_turn
       args.state.result << "Paralyzed: #{@user.name}"
       return
     end
@@ -281,7 +304,7 @@ class ElementalAttack < Action
   end
 
   def resolve args
-    if @user.paralysis
+    if @user.paralyzed_this_turn
       args.state.result << "Paralyzed: #{@user.name}"
       return
     end
@@ -613,6 +636,7 @@ class RaiseDead < Spell
           @target.controller = users[0]
           @target.target = args.state.beings.find { |b| b.is_a?(Warlock) && b != users[0] }
         else # minion is confused
+          # TODO confused monsters attack at random
           @target.controller = nil
           @target.target = nil
         end
@@ -732,7 +756,14 @@ class Paralysis < Spell
     end
 
     args.state.result << description
-    @target.paralysis = true
+    @target.paralyze @user
+
+    # slightly hacky: if a non-warlock paralyzes a non-paralyzed warlock, randomly choose the paralyzed hand now
+    # this lets us show the paralyzed hand now and the system to maintain paralysis will do the rest
+    if !@user.is_a?(Warlock) && @target.is_a?(Warlock) && !@target.paralyzed_hand
+      @target.paralyzed_hand = rand(2)
+      args.state.result << "#{@user.name} paralyzes #{@target.name}'s #{%w{left right}[@target.paralyzed_hand]} hand"
+    end
   end
 end
 
@@ -903,9 +934,19 @@ class Stab < Action
   @default_target = :other
   @order = 40
 end
-class Surrender < Action
-  @name = 'surrender'
+
+class Nothing < Action
+  @name = 'Nothing'
   @order = 41
+
+  def resolve args
+    # do nothing
+  end
 end
 
+class Surrender < Action
+  @name = 'surrender'
+  @order = 42
+end
 
+Actions = [Nothing,DispelMagic,CounterSpell,MagicMirror,SummonGoblin,SummonOgre,SummonTroll,SummonGiant,SummonFireElemental,SummonIceElemental,RaiseDead,Haste,TimeStop,Protection,ResistHeat,ResistCold,Paralysis,Amnesia,Fear,Confusion,CharmMonster,CharmPerson,Disease,Poison,CureLightWounds,CureHeavyWounds,AntiSpell,Blindness,Invisibility,Permanency,DelayEffect,RemoveEnchantment,Shield,MagicMissile,CauseLightWounds,CauseHeavyWounds,LightningBolt,Fireball,FingerOfDeath,FireStorm,IceStorm,Stab,Surrender]

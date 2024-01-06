@@ -1,15 +1,37 @@
 require 'lib/actions'
 
-$actions = [DispelMagic,CounterSpell,MagicMirror,SummonGoblin,SummonOgre,SummonTroll,SummonGiant,SummonFireElemental,SummonIceElemental,RaiseDead,Haste,TimeStop,Protection,ResistHeat,ResistCold,Paralysis,Amnesia,Fear,Confusion,CharmMonster,CharmPerson,Disease,Poison,CureLightWounds,CureHeavyWounds,AntiSpell,Blindness,Invisibility,Permanency,DelayEffect,RemoveEnchantment,Shield,MagicMissile,CauseLightWounds,CauseHeavyWounds,LightningBolt,Fireball,FingerOfDeath,FireStorm,IceStorm,Stab,Surrender]
-
 def tick args
-  args.state.options ||= $actions.map(&:name).unshift('Nothing')
+  args.state.options ||= Actions.map(&:name)
 
   args.state.west ||= Warlock.new('West', :w, :s, :d)
   args.state.east ||= Warlock.new('East', :up, :down, :left)
   args.state.beings ||= [args.state.west, args.state.east]
 
   args.state.result ||= []
+
+  # Overall game loop structure:
+  #
+  # check if time stop turn
+  # else if haste turn but no one has haste, skip haste turn
+  #
+  # simultaneous for each warlock:
+  #   if previously cast paralyze, choose paralyzed hand
+  #   if previously cast charm person, choose charmed hand and gesture
+  #   for each hand:
+  #     choose gesture (will be ignored if hand paralyzed/charmed)
+  #     choose spell
+  #     choose target
+  #     choose delay (if allowed)
+  #     choose permanent (if allowed)
+  #   choose to fire delayed spell (if delayed on previous turn)
+  #   for each controlled monster and for each monster you _could_ control via spells:
+  #     choose monster's target
+  #
+  # if any warlocks are confused, randomly choose hand, gesture, and spell (default target)
+  #
+  # resolve all actions
+  # check for surrender
+  # check for time stop
 
   # is this a time stop turn?
   time_stopped = args.state.beings.any? { |b| b.time_stopped }
@@ -19,10 +41,34 @@ def tick args
     args.state.haste = false
   end
 
-  # advance time for all beings if this is the start of a normal turn
+  # if this is the start of a normal turn
   if !time_stopped && !args.state.haste
-    # TODO record if paralysis input is needed for any warlock's  prior to tick
-    args.state.beings.each { |b| b.tick }
+    # clear all warlocks' paralysis targets
+    args.state.beings.each do |being|
+      next unless being.is_a? Warlock
+      being.paralysis_target = nil
+    end
+
+    args.state.beings.each do |being|
+      # if a warlock was paralyzed, need to paralyze one of their hands _after_ the tick
+      paralyzed_hand = nil
+      if being.is_a?(Warlock) && being.paralyzed_this_turn
+        # if previously paralyzed, the same hand continues to be paralyzed
+        unless paralyzed_hand = being.paralyzed_hand
+          if being.paralyzed_by.is_a? Warlock
+            # store target so they can choose the hand after
+            being.paralyzed_by.paralysis_target = being
+          else
+            raise "somehow failed to select paralyzed hand for non-warlock caster"
+          end
+        end
+      end
+
+      being.tick
+
+      # tick clears paralysis, retain it if needed
+      being.paralyzed_hand = paralyzed_hand if paralyzed_hand
+    end
   end
 
   # get all inputs from warlocks and see if they're ready
@@ -66,7 +112,7 @@ def tick args
           if args.state.west.index == 0
             :self
           else
-            $actions[warlock.index - 1].default_target || :self
+            Actions[warlock.index].default_target || :self
           end
 
         warlock.index = args.state.beings.index do |being|
@@ -98,10 +144,9 @@ def tick args
     actions = []
     [args.state.west, args.state.east].each do |warlock|
       warlock.choices.each_with_index do |i, j|
-        i -= 1 # undo Nothing being added to the front of the list
         next unless i >= 0
 
-        action = $actions[i]
+        action = Actions[i]
         actions << action.new(warlock, warlock.targets[j])
       end
     end
@@ -127,6 +172,7 @@ def tick args
       action.resolve args
     end
 
+    # health can go below min or above max to handle simultaneous resolution, now it should clamp
     args.state.beings.each do |being|
       being.clamp_health
     end
