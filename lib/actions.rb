@@ -95,7 +95,9 @@ end
 # player character
 class Warlock < Being
   attr_reader :up, :down, :select
-  attr_accessor :index, :choices, :targets, :paralysis_target, :paralyzed_hand, :charm_target
+  attr_accessor :index, :choices, :targets, :paralyzed_hand, :charm_target, :current_beings, :paralysis_target
+
+  GESTURES = [:f, :p, :s, :w, :d, :c, :>, :-]
 
   def initialize name, up, down, select
     super()
@@ -106,13 +108,16 @@ class Warlock < Being
 
     @max_health = 15
     @health = @max_health
-    # TODO: replace with real spell selection system
-    @index = 0
+    @index = nil
     # left, right
+    @gestures = [] # all
+    @new_gestures = []
     @choices = []
-    # left, right
     @targets = []
 
+    @current_beings = []
+
+    @did_paralyze = false
     @paralyzed_hand = nil
   end
 
@@ -126,11 +131,84 @@ class Warlock < Being
     @targets = []
   end
 
+  # TODO: menu sequence is wrong. should be gesture, choice, target for each hand
+  def menu
+    if @paralysis_target && (!@did_paralyze || @targets.length >= 2)
+      @index = 0 unless @index
+      # TODO: show target's previous hand gestures
+      return %w{left right}
+    elsif @new_gestures.length < 2 || @targets.length >= 2
+      @index = 0 unless @index
+      # TODO: previews of what each gesture accomplishes
+      return GESTURES.map(&:to_s)
+    elsif @choices.length < 2
+      @index = 0 unless @index
+      # TODO: real spell selection system
+      return Actions.map(&:name)
+    elsif @targets.length < 2
+      unless @index
+        if (@choices[@targets.length - 1].default_target || :self) == :self
+          @index = @current_beings.index { |b| b == self }
+        else
+          @index = @current_beings.index { |b| b.is_a?(Warlock) && b != self }
+        end
+      end
+      return @current_beings.map(&:name)
+    else
+      raise "logic error in determining current menu: #{inspect}"
+    end
+  end
+
+  def menu_down
+    @index = (@index + 1) % menu.length
+  end
+
+  def menu_up
+    @index = (@index - 1) % menu.length
+  end
+
+  def menu_select
+    if @paralysis_target && (!@did_paralyze || ready_to_resolve)
+      @paralysis_target.paralyzed_hand = @index
+      @did_paralyze = true
+      @index = nil
+      # clear all other inputs in case they are redoing them
+      @new_gestures = []
+      @choices = []
+      @targets = []
+    elsif @new_gestures.length < 2 || ready_to_resolve
+      # if redoing input, clear previous
+      if @new_gestures.length >= 2
+        @new_gestures = []
+      end
+      @new_gestures << GESTURES[index]
+      case @new_gestures[-1]
+      when :c
+        @new_gestures = [:c, :c]
+      when :>
+        if @new_gestures.length >= 2 && @new_gestures[0] == :>
+          @new_gestures = [:-, :>]
+        end
+      end
+      @index = nil
+      if @new_gestures.length >= 2
+        # clear all other inputs in case they are redoing them (and didn't paralyze/charm)
+        @choices = []
+        @targets = []
+      end
+    elsif @choices.length < 2
+      @choices << Actions[@index]
+      @index = nil
+    elsif @targets.length < 2
+      @targets << @current_beings[@index]
+      @index = nil
+    else
+      raise "logic error in menu selection: #{inspect}"
+    end
+  end
+
   def ready_to_resolve
-    @paralysis_target == nil &&
-      @charm_target == nil &&
-      @choices.length >= 2 &&
-      @targets.length >= 2
+    @targets.length >= 2
   end
 end
 

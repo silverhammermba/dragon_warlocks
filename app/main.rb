@@ -44,6 +44,7 @@ def tick args
   # if this is the start of a normal turn
   if !time_stopped && !args.state.haste
     # clear all warlocks' paralysis targets
+    # TODO: should this be done on time stop or haste turns?
     args.state.beings.each do |being|
       next unless being.is_a? Warlock
       being.paralysis_target = nil
@@ -71,8 +72,12 @@ def tick args
     end
   end
 
+  args.state.beings.each do |being|
+    next unless being.is_a?(Warlock)
+    being.current_beings = args.state.beings
+  end
+
   # get all inputs from warlocks and see if they're ready
-  # TODO: get paralysis input first, if needed
   wizard_acted = false
   both_ready = [args.state.west, args.state.east].map do |warlock|
     # if this is a time stop or haste turn, but this warlock doesn't have it, skip them
@@ -80,60 +85,14 @@ def tick args
       next true
     end
 
-    # order is:
-    # 1. left hand spell
-    # 2. left hand target
-    # 3. right hand spell
-    # 4. right hand target
-    # 5. repeat
-
-    # are we on step 1, 3, or 5? choose a spell
-    if warlock.choices.empty? || warlock.ready_to_resolve || (warlock.choices.length == 1 && warlock.targets.length == 1)
-      # change selection in action menu
-      if args.inputs.keyboard.key_down.send(warlock.up)
-        warlock.index -= 1
-      end
-      if args.inputs.keyboard.key_down.send(warlock.down)
-        warlock.index += 1
-      end
-      warlock.index %= args.state.options.length
-
-      # select current action
-      if args.inputs.keyboard.key_down.send(warlock.select)
-        # if we're choosing left hand, clear in case they restarted selection
-        if warlock.targets.length != 1
-          warlock.clear_input
-        end
-        warlock.choices << warlock.index
-
-        # target is next, so reset index based on default target
-        # no default target is set to self
-        default_target =
-          if args.state.west.index == 0
-            :self
-          else
-            Actions[warlock.index].default_target || :self
-          end
-
-        warlock.index = args.state.beings.index do |being|
-          (default_target == :self && being == warlock) || (default_target == :other && being.is_a?(Warlock) && being != warlock)
-        end
-      end
-    elsif warlock.targets.length < 2 # are we on step 2 or 4?
-      # change selection in being menu
-      if args.inputs.keyboard.key_down.send(warlock.up)
-        warlock.index -= 1
-      end
-      if args.inputs.keyboard.key_down.send(warlock.down)
-        warlock.index += 1
-      end
-      warlock.index %= args.state.beings.length
-
-      # select current being
-      if args.inputs.keyboard.key_down.send(warlock.select)
-        warlock.targets << args.state.beings[warlock.index]
-        warlock.index = 0
-      end
+    if args.inputs.keyboard.key_down.send(warlock.up)
+      warlock.menu_up
+    end
+    if args.inputs.keyboard.key_down.send(warlock.down)
+      warlock.menu_down
+    end
+    if args.inputs.keyboard.key_down.send(warlock.select)
+      warlock.menu_select
     end
     wizard_acted = true
     warlock.ready_to_resolve
@@ -143,10 +102,7 @@ def tick args
   if both_ready
     actions = []
     [args.state.west, args.state.east].each do |warlock|
-      warlock.choices.each_with_index do |i, j|
-        next unless i >= 0
-
-        action = Actions[i]
+      warlock.choices.each_with_index do |action, i|
         actions << action.new(warlock, warlock.targets[j])
       end
     end
@@ -196,14 +152,9 @@ def tick args
   end
 
   [[args.state.west, 0, 1, 0], [args.state.east, 1280, -1, 2]].each do |warlock, edge, shift, alignment|
-    args.outputs.labels << [edge + shift * 10, 660, "#{warlock.name}: " + warlock.choices.map { |i| args.state.options[i] }.join(', '), 6, alignment]
+    args.outputs.labels << [edge + shift * 10, 660, "#{warlock.name}: " + warlock.choices.map(&:name).join(', '), 6, alignment]
 
-    choices =
-      if warlock.choices.empty? || warlock.ready_to_resolve || (warlock.choices.length == 1 && warlock.targets.length == 1)
-        args.state.options
-      elsif warlock.targets.length < 2
-        args.state.beings.map(&:name)
-      end
+    choices = warlock.menu
 
     (-5..5).each do |o|
       i = (warlock.index + o) % choices.length
