@@ -103,7 +103,7 @@ def tick args
     actions = []
     [args.state.west, args.state.east].each do |warlock|
       warlock.choices.each_with_index do |action, i|
-        actions << action.new(warlock, warlock.targets[j])
+        actions << action.new(warlock, warlock.targets[i])
       end
     end
 

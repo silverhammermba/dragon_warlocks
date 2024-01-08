@@ -131,21 +131,43 @@ class Warlock < Being
     @targets = []
   end
 
-  # TODO: menu sequence is wrong. should be gesture, choice, target for each hand
-  def menu
+  def menu_state
+    # TODO: charm
+    # TODO: monster target if you control (or any spell _could_ control) a monster
     if @paralysis_target && (!@did_paralyze || @targets.length >= 2)
+      return :paralysis
+    elsif @new_gestures.length == 0 || @targets.length >= 2
+      return :left_gesture
+    elsif @choices.length == 0
+      return :left_choice
+    elsif @targets.length == 0
+      return :left_target
+    elsif @new_gestures.length == 1
+      return :right_gesture
+    elsif @choices.length == 1
+      return :right_choice
+    elsif @targets.length == 1
+      return :right_target
+    else
+      raise "logic error in determining current menu state: #{inspect}"
+    end
+  end
+
+  def menu
+    case menu_state
+    when :paralysis
       @index = 0 unless @index
       # TODO: show target's previous hand gestures
       return %w{left right}
-    elsif @new_gestures.length < 2 || @targets.length >= 2
+    when :left_gesture, :right_gesture
       @index = 0 unless @index
       # TODO: previews of what each gesture accomplishes
       return GESTURES.map(&:to_s)
-    elsif @choices.length < 2
+    when :left_choice, :right_choice
       @index = 0 unless @index
       # TODO: real spell selection system
       return Actions.map(&:name)
-    elsif @targets.length < 2
+    when :left_target, :right_target
       unless @index
         if (@choices[@targets.length - 1].default_target || :self) == :self
           @index = @current_beings.index { |b| b == self }
@@ -155,7 +177,7 @@ class Warlock < Being
       end
       return @current_beings.map(&:name)
     else
-      raise "logic error in determining current menu: #{inspect}"
+      raise "unhandled menu state: #{menu_state}"
     end
   end
 
@@ -168,7 +190,9 @@ class Warlock < Being
   end
 
   def menu_select
-    if @paralysis_target && (!@did_paralyze || ready_to_resolve)
+    # TODO: clearing input at the wrong time. first hand selection isn't retained?
+    case menu_state
+    when :paralysis
       @paralysis_target.paralyzed_hand = @index
       @did_paralyze = true
       @index = nil
@@ -176,7 +200,7 @@ class Warlock < Being
       @new_gestures = []
       @choices = []
       @targets = []
-    elsif @new_gestures.length < 2 || ready_to_resolve
+    when :left_gesture, :right_gesture
       # if redoing input, clear previous
       if @new_gestures.length >= 2
         @new_gestures = []
@@ -196,14 +220,14 @@ class Warlock < Being
         @choices = []
         @targets = []
       end
-    elsif @choices.length < 2
+    when :left_choice, :right_choice
       @choices << Actions[@index]
       @index = nil
-    elsif @targets.length < 2
+    when :left_target, :right_target
       @targets << @current_beings[@index]
       @index = nil
     else
-      raise "logic error in menu selection: #{inspect}"
+      raise "unhandled menu state: #{menu_state}"
     end
   end
 
