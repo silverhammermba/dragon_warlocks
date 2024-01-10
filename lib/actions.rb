@@ -108,9 +108,9 @@ class Warlock < Being
 
     @max_health = 15
     @health = @max_health
-    @index = nil
+    @index = 0
     # left, right
-    @gestures = [] # all
+    @gestures = [[], []] # all
     @new_gestures = []
     @choices = []
     @targets = []
@@ -126,7 +126,11 @@ class Warlock < Being
     @paralyzed_hand = nil
   end
 
-  def clear_input
+  def finalize_input
+    @gestures[0] << @new_gestures[0]
+    @gestures[1] << @new_gestures[1]
+    @did_paralyze = false
+    @new_gestures = []
     @choices = []
     @targets = []
   end
@@ -135,19 +139,19 @@ class Warlock < Being
     # TODO: charm
     # TODO: monster target if you control (or any spell _could_ control) a monster
     if @paralysis_target && (!@did_paralyze || @targets.length >= 2)
-      return :paralysis
+      :paralysis
     elsif @new_gestures.length == 0 || @targets.length >= 2
-      return :left_gesture
+      :left_gesture
     elsif @choices.length == 0
-      return :left_choice
+      :left_choice
     elsif @targets.length == 0
-      return :left_target
+      :left_target
     elsif @new_gestures.length == 1
-      return :right_gesture
+      :right_gesture
     elsif @choices.length == 1
-      return :right_choice
+      :right_choice
     elsif @targets.length == 1
-      return :right_target
+      :right_target
     else
       raise "logic error in determining current menu state: #{inspect}"
     end
@@ -156,26 +160,16 @@ class Warlock < Being
   def menu
     case menu_state
     when :paralysis
-      @index = 0 unless @index
       # TODO: show target's previous hand gestures
-      return %w{left right}
+      %w{left right}
     when :left_gesture, :right_gesture
-      @index = 0 unless @index
       # TODO: previews of what each gesture accomplishes
-      return GESTURES.map(&:to_s)
+      GESTURES.map(&:to_s)
     when :left_choice, :right_choice
-      @index = 0 unless @index
       # TODO: real spell selection system
-      return Actions.map(&:name)
+      Actions.map(&:name)
     when :left_target, :right_target
-      unless @index
-        if (@choices[@targets.length - 1].default_target || :self) == :self
-          @index = @current_beings.index { |b| b == self }
-        else
-          @index = @current_beings.index { |b| b.is_a?(Warlock) && b != self }
-        end
-      end
-      return @current_beings.map(&:name)
+      @current_beings.map(&:name)
     else
       raise "unhandled menu state: #{menu_state}"
     end
@@ -189,13 +183,30 @@ class Warlock < Being
     @index = (@index - 1) % menu.length
   end
 
+  def reset_index
+    case menu_state
+    when :paralysis
+      @index = 0
+    when :left_gesture, :right_gesture
+      @index = 0
+    when :left_choice, :right_choice
+      @index = 0
+    when :left_target, :right_target
+      if (@choices[@targets.length - 1].default_target || :self) == :self
+        @index = @current_beings.index { |b| b == self }
+      else
+        @index = @current_beings.index { |b| b.is_a?(Warlock) && b != self }
+      end
+    else
+      raise "unhandled menu state: #{menu_state}"
+    end
+  end
+
   def menu_select
-    # TODO: clearing input at the wrong time. first hand selection isn't retained?
     case menu_state
     when :paralysis
       @paralysis_target.paralyzed_hand = @index
       @did_paralyze = true
-      @index = nil
       # clear all other inputs in case they are redoing them
       @new_gestures = []
       @choices = []
@@ -206,6 +217,11 @@ class Warlock < Being
         @new_gestures = []
       end
       @new_gestures << GESTURES[index]
+      if @new_gestures.length == 1
+        # clear all other inputs in case they are redoing them (and didn't paralyze/charm)
+        @choices = []
+        @targets = []
+      end
       case @new_gestures[-1]
       when :c
         @new_gestures = [:c, :c]
@@ -214,21 +230,14 @@ class Warlock < Being
           @new_gestures = [:-, :>]
         end
       end
-      @index = nil
-      if @new_gestures.length >= 2
-        # clear all other inputs in case they are redoing them (and didn't paralyze/charm)
-        @choices = []
-        @targets = []
-      end
     when :left_choice, :right_choice
       @choices << Actions[@index]
-      @index = nil
     when :left_target, :right_target
       @targets << @current_beings[@index]
-      @index = nil
     else
       raise "unhandled menu state: #{menu_state}"
     end
+    reset_index
   end
 
   def ready_to_resolve

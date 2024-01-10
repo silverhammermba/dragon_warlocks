@@ -105,6 +105,7 @@ def tick args
       warlock.choices.each_with_index do |action, i|
         actions << action.new(warlock, warlock.targets[i])
       end
+      warlock.finalize_input
     end
 
     args.state.actions = actions.sort
@@ -152,6 +153,7 @@ def tick args
   end
 
   [[args.state.west, 0, 1, 0], [args.state.east, 1280, -1, 2]].each do |warlock, edge, shift, alignment|
+    args.outputs.labels << [edge + shift * 10, 690, "#{warlock.menu_state}", 6, alignment]
     args.outputs.labels << [edge + shift * 10, 660, "#{warlock.name}: " + warlock.choices.map(&:name).join(', '), 6, alignment]
 
     choices = warlock.menu
