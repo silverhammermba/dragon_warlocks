@@ -7,7 +7,7 @@ class Being
   # time_stop is whether time will stop for this being at the end of the turn
   # time_stopped is whether time is currently stopped for this being
   # paralyzed_by records who paralyzed this being
-  attr_accessor :shielded, :resistance, :haste, :time_stop, :time_stopped
+  attr_accessor :shielded, :resistance, :haste, :time_stop, :time_stopped, :amnesia
   attr_reader :paralyzed_by
 
   def initialize
@@ -26,6 +26,8 @@ class Being
     @protection = [0, @protection - 1].max
     @haste = [0, @haste - 1].max
     @paralyzed_by = nil
+    @amnesiac = @amnesia
+    @amnesia = false
   end
 
   def paralyze user
@@ -133,29 +135,37 @@ class Warlock < Being
     @targets = []
   end
 
-  def apply_paralysis args
-    return unless @paralyzed_hand
+  def last_gesture hand
     last = -1
-    gesture = nil
-    # go back to the last gesture before this turn's
     loop do
-      gesture = @gestures[@paralyzed_hand][last]
-      break unless gesture == :antispell
+      gesture = @gestures[hand][last]
+      return gesture unless gesture == :antispell
       last -= 1
     end
-    paralyzed_gesture =
-      case gesture
-      when :c
-        :f
-      when :s
-        :d
-      when :w
-        :p
-      else
-        gesture
+  end
+
+  # paralysis/amnesia/charm could change gestures
+  def update_gestures args
+    if @paralyzed_hand
+      gesture = last_gesture @paralyzed_hand
+      paralyzed_gesture =
+        case gesture
+        when :c
+          :f
+        when :s
+          :d
+        when :w
+          :p
+        else
+          gesture
+        end
+      args.state.result << "#{self.name} #{%w{left right}[@paralyzed_hand]} hand paralyzed: #{paralyzed_gesture}"
+      @new_gestures[@paralyzed_hand] = paralyzed_gesture
+    elsif @amnesiac
+      [0, 1].each do |hand|
+        @new_gestures[hand] = last_gesture hand
       end
-    args.state.result << "#{self.name} #{%w{left right}[@paralyzed_hand]} hand paralyzed: #{paralyzed_gesture}"
-    @new_gestures[@paralyzed_hand] = paralyzed_gesture
+    end
   end
 
   # because of paralysis/charm, gestures may not match choices. randomly correct that now
@@ -422,9 +432,11 @@ class Attack < Action
   end
 
   def resolve args
-    return if @target.health <= 0
     if @user.paralyzed_this_turn
-      args.state.result << "Paralyzed: #{@user.name}"
+      args.state.result << "#{@user.name} is paralyzed!"
+      return
+    elsif @user.amnesia
+      args.state.result << "#{@user.name} forgets to attack!"
       return
     end
     if target.physical_damage @strength, @user
@@ -444,7 +456,10 @@ class ElementalAttack < Action
 
   def resolve args
     if @user.paralyzed_this_turn
-      args.state.result << "Paralyzed: #{@user.name}"
+      args.state.result << "#{@user.name} is paralyzed!"
+      return
+    elsif @user.amnesia
+      args.state.result << "#{@user.name} forgets to attack!"
       return
     end
     # attack all non-resistant beings
@@ -911,7 +926,29 @@ class Amnesia < Spell
   @default_target = :other
   @order = 16
   @type = :enchantment
+
+  def resolve args
+    cancelled = []
+    args.state.actions.reject! do |action|
+      if action.target == @target && [Amnesia, Confusion, CharmPerson, CharmMonster, Fear].any? { |a| action.is_a? a }
+        cancelled << action
+        true
+      end
+    end
+
+    if cancelled.length > 0
+      cancelled.unshift self
+      cancelled.each do |action|
+        args.state.result << "Cancelled: #{action.description}"
+      end
+      return
+    end
+
+    @target.amnesia = true
+    args.state.result << description
+  end
 end
+
 class Fear < Spell
   @name = 'Fear'
   @default_target = :other

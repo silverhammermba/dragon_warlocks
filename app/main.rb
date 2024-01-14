@@ -63,7 +63,7 @@ def tick args
 
     actions = []
     [args.state.west, args.state.east].each do |warlock|
-      warlock.apply_paralysis args
+      warlock.update_gestures args
 
       warlock.update_choices
 
@@ -94,10 +94,6 @@ def tick args
     args.state.beings.each do |being|
       being.clamp_health
     end
-
-    # clear spell selection
-    args.state.west.choices = []
-    args.state.east.choices = []
 
     # check if anyone stopped time this turn
     args.state.time_stopped = false
