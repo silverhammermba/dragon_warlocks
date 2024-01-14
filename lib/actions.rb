@@ -115,8 +115,6 @@ class Warlock < Being
     @choices = []
     @targets = []
 
-    @current_beings = []
-
     @did_paralyze = false
     @paralyzed_hand = nil
   end
@@ -133,6 +131,36 @@ class Warlock < Being
     @new_gestures = []
     @choices = []
     @targets = []
+  end
+
+  def apply_paralysis args
+    return unless @paralyzed_hand
+    last = -1
+    gesture = nil
+    # go back to the last gesture before this turn's
+    loop do
+      gesture = @gestures[@paralyzed_hand][last]
+      break unless gesture == :antispell
+      last -= 1
+    end
+    paralyzed_gesture =
+      case gesture
+      when :c
+        :f
+      when :s
+        :d
+      when :w
+        :p
+      else
+        gesture
+      end
+    args.state.result << "#{self.name} #{%w{left right}[@paralyzed_hand]} hand paralyzed: #{paralyzed_gesture}"
+    @new_gestures[@paralyzed_hand] = paralyzed_gesture
+  end
+
+  # because of paralysis/charm, gestures may not match choices. randomly correct that now
+  def update_choices
+    # TODO: implement real spell system
   end
 
   def menu_state

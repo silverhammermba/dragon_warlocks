@@ -1,11 +1,11 @@
 require 'lib/actions'
 
 def tick args
-  args.state.options ||= Actions.map(&:name)
-
   args.state.west ||= Warlock.new('West', :w, :s, :d)
   args.state.east ||= Warlock.new('East', :up, :down, :left)
   args.state.beings ||= [args.state.west, args.state.east]
+  args.state.west.current_beings ||= args.state.beings
+  args.state.east.current_beings ||= args.state.beings
 
   args.state.result ||= []
 
@@ -33,55 +33,11 @@ def tick args
   # check for surrender
   # check for time stop
 
-  # is this a time stop turn?
-  time_stopped = args.state.beings.any? { |b| b.time_stopped }
-
-  # if this is a haste turn, but no one has haste, skip it
-  if !time_stopped && args.state.haste && args.state.beings.all? { |b| !b.haste? }
-    args.state.haste = false
-  end
-
-  # if this is the start of a normal turn
-  if !time_stopped && !args.state.haste
-    # clear all warlocks' paralysis targets
-    # TODO: should this be done on time stop or haste turns?
-    args.state.beings.each do |being|
-      next unless being.is_a? Warlock
-      being.paralysis_target = nil
-    end
-
-    args.state.beings.each do |being|
-      # if a warlock was paralyzed, need to paralyze one of their hands _after_ the tick
-      paralyzed_hand = nil
-      if being.is_a?(Warlock) && being.paralyzed_this_turn
-        # if previously paralyzed, the same hand continues to be paralyzed
-        unless paralyzed_hand = being.paralyzed_hand
-          if being.paralyzed_by.is_a? Warlock
-            # store target so they can choose the hand after
-            being.paralyzed_by.paralysis_target = being
-          else
-            raise "somehow failed to select paralyzed hand for non-warlock caster"
-          end
-        end
-      end
-
-      being.tick
-
-      # tick clears paralysis, retain it if needed
-      being.paralyzed_hand = paralyzed_hand if paralyzed_hand
-    end
-  end
-
-  args.state.beings.each do |being|
-    next unless being.is_a?(Warlock)
-    being.current_beings = args.state.beings
-  end
-
   # get all inputs from warlocks and see if they're ready
   wizard_acted = false
   both_ready = [args.state.west, args.state.east].map do |warlock|
     # if this is a time stop or haste turn, but this warlock doesn't have it, skip them
-    if (time_stopped && !warlock.time_stopped) || (!time_stopped && args.state.haste && !warlock.haste?)
+    if (args.state.time_stopped && !warlock.time_stopped) || (!args.state.time_stopped && args.state.haste && !warlock.haste?)
       next true
     end
 
@@ -100,8 +56,17 @@ def tick args
 
   # resolve actions
   if both_ready
+    # clear resolution if a wizard acted (it means we already saw what happened previously)
+    if wizard_acted
+      args.state.result = []
+    end
+
     actions = []
     [args.state.west, args.state.east].each do |warlock|
+      warlock.apply_paralysis args
+
+      warlock.update_choices
+
       warlock.choices.each_with_index do |action, i|
         actions << action.new(warlock, warlock.targets[i])
       end
@@ -109,14 +74,10 @@ def tick args
     end
 
     args.state.actions = actions.sort
-    # clear resolution if a wizard acted (it means we already saw what happened previously)
-    if wizard_acted
-      args.state.result = []
-    end
 
     # all monster attacks go last
     args.state.beings.each do |being|
-      if (time_stopped && !being.time_stopped) || (!time_stopped && args.state.haste && !being.haste?)
+      if (args.state.time_stopped && !being.time_stopped) || (!args.state.time_stopped && args.state.haste && !being.haste?)
         next
       end
       if being.is_a?(Monster) && being.health > 0
@@ -139,16 +100,57 @@ def tick args
     args.state.east.choices = []
 
     # check if anyone stopped time this turn
-    time_stopped = false
+    args.state.time_stopped = false
     args.state.beings.each do |being|
-      time_stopped ||= being.time_stop
+      args.state.time_stopped ||= being.time_stop
       being.time_stopped = being.time_stop
       being.time_stop = false
     end
 
     # resolve opposite turn type next
-    unless time_stopped
+    unless args.state.time_stopped
       args.state.haste = !args.state.haste
+
+      # if this is a haste turn, but no one has haste, skip it
+      if args.state.haste && args.state.beings.all? { |b| !b.haste? }
+        args.state.haste = false
+      end
+    end
+
+    # if this is the start of a normal turn
+    if !args.state.time_stopped && !args.state.haste
+      # clear all warlocks' paralysis targets
+      # TODO: should this be done on time stop or haste turns?
+      args.state.beings.each do |being|
+        next unless being.is_a? Warlock
+        being.paralysis_target = nil
+      end
+
+      args.state.beings.each do |being|
+        # if a warlock was paralyzed, need to paralyze one of their hands _after_ the tick
+        paralyzed_hand = nil
+        if being.is_a?(Warlock) && being.paralyzed_this_turn
+          # if previously paralyzed, the same hand continues to be paralyzed
+          unless paralyzed_hand = being.paralyzed_hand
+            if being.paralyzed_by.is_a? Warlock
+              # store target so they can choose the hand next turn
+              being.paralyzed_by.paralysis_target = being
+            else
+              raise "somehow failed to select paralyzed hand for non-warlock caster"
+            end
+          end
+        end
+
+        being.tick
+
+        # tick clears paralysis, retain it if needed
+        being.paralyzed_hand = paralyzed_hand if paralyzed_hand
+      end
+    end
+
+    args.state.beings.each do |being|
+      next unless being.is_a?(Warlock)
+      being.current_beings = args.state.beings
     end
   end
 
